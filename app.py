@@ -36,17 +36,27 @@ def get_connection():
     """
 
     try:
+        def get_connection():
+
+    try:
         connection = mysql.connector.connect(
-            host=st.secrets["mysql"]["host"],
-            port=int(st.secrets["mysql"]["port"]),
-            user=st.secrets["mysql"]["user"],
-            password=st.secrets["mysql"]["password"],
-            database=st.secrets["mysql"]["database"],
-
-            # Aiven yêu cầu SSL
+            host="mysql-24eda0f5-tramy04062005-899b.k.aivencloud.com",
+            port=13321,
+            user="avnadmin",
+            password="AVNS_eyALQ_tYt5oQ7pItFnm",
+            database="defaultdb",
             ssl_ca=str(CA_FILE),
+            connection_timeout=20
+        )
 
-            connection_timeout=15
+        return connection
+
+    except Exception as e:
+
+        st.error("❌ Không kết nối được Aiven MySQL.")
+        st.code(str(e))
+
+        return None
         )
 
         return connection
