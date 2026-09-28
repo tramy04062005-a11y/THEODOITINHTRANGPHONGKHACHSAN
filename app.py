@@ -1,96 +1,248 @@
 import streamlit as st
-import sqlite3
+import mysql.connector
+from mysql.connector import Error
+from pathlib import Path
 from datetime import datetime
 import pandas as pd
 
+
 # =========================================================
-# CẤU HÌNH APP
+# CẤU HÌNH STREAMLIT
 # =========================================================
 
 st.set_page_config(
-    page_title="Melia Vinpearl Phú Quốc - Quản lý phòng",
+    page_title="Melia Vinpearl Phú Quốc - Housekeeping",
     page_icon="🏨",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-DB_NAME = "melia_hotel.db"
 
 # =========================================================
-# DATABASE
+# CẤU HÌNH DATABASE
+# =========================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+CA_FILE = BASE_DIR / "ca.pem"
+
+
+# =========================================================
+# KẾT NỐI MYSQL AIVEN
 # =========================================================
 
 def get_connection():
-    conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """
+    Kết nối MySQL Aiven thông qua Streamlit Secrets.
+    """
 
+    try:
+        connection = mysql.connector.connect(
+            host=st.secrets["mysql"]["host"],
+            port=int(st.secrets["mysql"]["port"]),
+            user=st.secrets["mysql"]["user"],
+            password=st.secrets["mysql"]["password"],
+            database=st.secrets["mysql"]["database"],
 
-def init_database():
-    conn = get_connection()
-    cursor = conn.cursor()
+            # Aiven yêu cầu SSL
+            ssl_ca=str(CA_FILE),
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS rooms (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_number TEXT UNIQUE NOT NULL,
-            villa_type TEXT NOT NULL,
-            building TEXT,
-            floor TEXT,
-            status TEXT NOT NULL DEFAULT 'Vacant Dirty',
-            guest_name TEXT,
-            hk_note TEXT,
-            updated_by TEXT,
-            updated_at TEXT
+            connection_timeout=15
         )
-    """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            room_number TEXT NOT NULL,
-            old_status TEXT,
-            new_status TEXT,
-            note TEXT,
-            updated_by TEXT,
-            updated_at TEXT
+        return connection
+
+    except Exception as e:
+        st.error("❌ Không thể kết nối đến Aiven MySQL.")
+        st.error(f"Chi tiết lỗi: {e}")
+        return None
+
+
+# =========================================================
+# TẠO DATABASE TABLE
+# =========================================================
+
+def initialize_database():
+
+    connection = get_connection()
+
+    if connection is None:
+        return False
+
+    try:
+
+        cursor = connection.cursor()
+
+        # -------------------------------------------------
+        # BẢNG ROOMS
+        # -------------------------------------------------
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rooms (
+
+                id INT AUTO_INCREMENT PRIMARY KEY,
+
+                room_number VARCHAR(20)
+                    NOT NULL UNIQUE,
+
+                villa_type VARCHAR(150)
+                    NOT NULL,
+
+                building VARCHAR(100),
+
+                floor VARCHAR(20),
+
+                status VARCHAR(50)
+                    NOT NULL DEFAULT 'Vacant Dirty',
+
+                guest_name VARCHAR(150),
+
+                hk_note TEXT,
+
+                updated_by VARCHAR(100),
+
+                updated_at DATETIME,
+
+                INDEX idx_room_status (status),
+
+                INDEX idx_room_number (room_number)
+
+            )
+        """)
+
+        # -------------------------------------------------
+        # BẢNG LỊCH SỬ
+        # -------------------------------------------------
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS room_history (
+
+                id INT AUTO_INCREMENT PRIMARY KEY,
+
+                room_number VARCHAR(20)
+                    NOT NULL,
+
+                old_status VARCHAR(50),
+
+                new_status VARCHAR(50),
+
+                note TEXT,
+
+                updated_by VARCHAR(100),
+
+                updated_at DATETIME,
+
+                INDEX idx_history_room (room_number),
+
+                INDEX idx_history_date (updated_at)
+
+            )
+        """)
+
+        connection.commit()
+
+        cursor.close()
+        connection.close()
+
+        return True
+
+    except Exception as e:
+
+        st.error(
+            f"❌ Không thể khởi tạo database: {e}"
         )
-    """)
 
-    conn.commit()
+        try:
+            connection.close()
+        except:
+            pass
 
-    # Tạo dữ liệu mẫu nếu database chưa có phòng
-    cursor.execute("SELECT COUNT(*) FROM rooms")
-    count = cursor.fetchone()[0]
+        return False
 
-    if count == 0:
-        sample_rooms = []
 
-        # Dữ liệu mẫu minh họa
-        for i in range(1, 31):
-            room_number = f"V{i:03d}"
+# =========================================================
+# THÊM DỮ LIỆU PHÒNG MẪU
+# =========================================================
 
-            if i <= 10:
-                villa_type = "One Bedroom Lake View Private Pool"
-            elif i <= 20:
-                villa_type = "Two-Bedroom Lake View Private Pool"
-            else:
-                villa_type = "The Level"
+def create_sample_rooms():
 
-            sample_rooms.append((
-                room_number,
-                villa_type,
+    connection = get_connection()
+
+    if connection is None:
+        return
+
+    try:
+
+        cursor = connection.cursor()
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM rooms"
+        )
+
+        total_rooms = cursor.fetchone()[0]
+
+        # Nếu đã có phòng thì không thêm lại
+        if total_rooms > 0:
+
+            cursor.close()
+            connection.close()
+
+            return
+
+        rooms = []
+
+        # -------------------------------------------------
+        # DỮ LIỆU MẪU
+        # -------------------------------------------------
+
+        for i in range(1, 11):
+
+            rooms.append((
+                f"V{i:03d}",
+                "One Bedroom Lake View Private Pool",
                 "Villa Area",
                 "1",
                 "Vacant Clean",
                 "",
                 "",
                 "System",
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                datetime.now()
             ))
+
+        for i in range(11, 21):
+
+            rooms.append((
+                f"V{i:03d}",
+                "Two-Bedroom Lake View Private Pool",
+                "Villa Area",
+                "1",
+                "Vacant Clean",
+                "",
+                "",
+                "System",
+                datetime.now()
+            ))
+
+        for i in range(21, 31):
+
+            rooms.append((
+                f"V{i:03d}",
+                "The Level",
+                "Villa Area",
+                "1",
+                "Vacant Clean",
+                "",
+                "",
+                "System",
+                datetime.now()
+            ))
+
+        # -------------------------------------------------
+        # INSERT
+        # -------------------------------------------------
 
         cursor.executemany("""
             INSERT INTO rooms (
+
                 room_number,
                 villa_type,
                 building,
@@ -100,41 +252,93 @@ def init_database():
                 hk_note,
                 updated_by,
                 updated_at
+
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, sample_rooms)
 
-        conn.commit()
+            VALUES (
 
-    conn.close()
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+
+            )
+        """, rooms)
+
+        connection.commit()
+
+        cursor.close()
+        connection.close()
+
+    except Exception as e:
+
+        st.warning(
+            f"Không thể tạo dữ liệu phòng mẫu: {e}"
+        )
+
+        try:
+            connection.close()
+        except:
+            pass
 
 
 # =========================================================
-# HÀM DATABASE
+# LẤY DANH SÁCH PHÒNG
 # =========================================================
 
 def get_rooms():
-    conn = get_connection()
 
-    df = pd.read_sql_query("""
-        SELECT
-            id,
-            room_number,
-            villa_type,
-            building,
-            floor,
-            status,
-            guest_name,
-            hk_note,
-            updated_by,
-            updated_at
-        FROM rooms
-        ORDER BY room_number
-    """, conn)
+    connection = get_connection()
 
-    conn.close()
-    return df
+    if connection is None:
+        return pd.DataFrame()
 
+    try:
+
+        query = """
+            SELECT
+                id,
+                room_number,
+                villa_type,
+                building,
+                floor,
+                status,
+                guest_name,
+                hk_note,
+                updated_by,
+                updated_at
+            FROM rooms
+            ORDER BY room_number
+        """
+
+        df = pd.read_sql(query, connection)
+
+        connection.close()
+
+        return df
+
+    except Exception as e:
+
+        st.error(
+            f"Không thể tải dữ liệu phòng: {e}"
+        )
+
+        try:
+            connection.close()
+        except:
+            pass
+
+        return pd.DataFrame()
+
+
+# =========================================================
+# CẬP NHẬT PHÒNG
+# =========================================================
 
 def update_room(
     room_number,
@@ -143,108 +347,212 @@ def update_room(
     note,
     updated_by
 ):
-    conn = get_connection()
-    cursor = conn.cursor()
 
-    cursor.execute("""
-        SELECT status
-        FROM rooms
-        WHERE room_number = ?
-    """, (room_number,))
+    connection = get_connection()
 
-    result = cursor.fetchone()
-
-    if result is None:
-        conn.close()
+    if connection is None:
         return False
 
-    old_status = result["status"]
+    try:
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor = connection.cursor(dictionary=True)
 
-    cursor.execute("""
-        UPDATE rooms
-        SET
-            status = ?,
-            guest_name = ?,
-            hk_note = ?,
-            updated_by = ?,
-            updated_at = ?
-        WHERE room_number = ?
-    """, (
-        new_status,
-        guest_name,
-        note,
-        updated_by,
-        now,
-        room_number
-    ))
+        # -------------------------------------------------
+        # LẤY TRẠNG THÁI CŨ
+        # -------------------------------------------------
 
-    cursor.execute("""
-        INSERT INTO history (
+        cursor.execute("""
+            SELECT status
+            FROM rooms
+            WHERE room_number = %s
+        """, (room_number,))
+
+        result = cursor.fetchone()
+
+        if result is None:
+
+            cursor.close()
+            connection.close()
+
+            return False
+
+        old_status = result["status"]
+
+        now = datetime.now()
+
+        # -------------------------------------------------
+        # UPDATE ROOM
+        # -------------------------------------------------
+
+        cursor.execute("""
+            UPDATE rooms
+
+            SET
+
+                status = %s,
+
+                guest_name = %s,
+
+                hk_note = %s,
+
+                updated_by = %s,
+
+                updated_at = %s
+
+            WHERE room_number = %s
+
+        """, (
+            new_status,
+            guest_name,
+            note,
+            updated_by,
+            now,
+            room_number
+        ))
+
+        # -------------------------------------------------
+        # LƯU HISTORY
+        # -------------------------------------------------
+
+        cursor.execute("""
+            INSERT INTO room_history (
+
+                room_number,
+
+                old_status,
+
+                new_status,
+
+                note,
+
+                updated_by,
+
+                updated_at
+
+            )
+
+            VALUES (
+
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s
+
+            )
+        """, (
             room_number,
             old_status,
             new_status,
             note,
             updated_by,
-            updated_at
+            now
+        ))
+
+        connection.commit()
+
+        cursor.close()
+        connection.close()
+
+        return True
+
+    except Exception as e:
+
+        st.error(
+            f"Lỗi cập nhật phòng: {e}"
         )
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        room_number,
-        old_status,
-        new_status,
-        note,
-        updated_by,
-        now
-    ))
 
-    conn.commit()
-    conn.close()
+        try:
+            connection.rollback()
+            connection.close()
+        except:
+            pass
 
-    return True
+        return False
 
+
+# =========================================================
+# LẤY LỊCH SỬ
+# =========================================================
 
 def get_history():
-    conn = get_connection()
 
-    df = pd.read_sql_query("""
-        SELECT
-            room_number,
-            old_status,
-            new_status,
-            note,
-            updated_by,
-            updated_at
-        FROM history
-        ORDER BY id DESC
-    """, conn)
+    connection = get_connection()
 
-    conn.close()
-    return df
+    if connection is None:
+        return pd.DataFrame()
+
+    try:
+
+        query = """
+            SELECT
+
+                room_number,
+                old_status,
+                new_status,
+                note,
+                updated_by,
+                updated_at
+
+            FROM room_history
+
+            ORDER BY id DESC
+        """
+
+        df = pd.read_sql(query, connection)
+
+        connection.close()
+
+        return df
+
+    except Exception as e:
+
+        st.error(
+            f"Không thể tải lịch sử: {e}"
+        )
+
+        try:
+            connection.close()
+        except:
+            pass
+
+        return pd.DataFrame()
 
 
 # =========================================================
-# KHỞI TẠO
+# KHỞI TẠO DATABASE
 # =========================================================
 
-init_database()
+database_ready = initialize_database()
+
+if database_ready:
+    create_sample_rooms()
+
+
+# =========================================================
+# LẤY DỮ LIỆU
+# =========================================================
 
 rooms_df = get_rooms()
 
+
 # =========================================================
-# TIÊU ĐỀ
+# HEADER
 # =========================================================
 
-st.title("🏨 THEO DÕI TÌNH TRẠNG PHÒNG")
-st.subheader("MELIA VINPEARL PHÚ QUỐC")
+st.title("🏨 MELIA VINPEARL PHÚ QUỐC")
+
+st.subheader(
+    "HỆ THỐNG THEO DÕI TÌNH TRẠNG PHÒNG"
+)
 
 st.caption(
-    "Hệ thống hỗ trợ bộ phận Housekeeping theo dõi, cập nhật "
-    "và kiểm soát tình trạng phòng khách sạn."
+    "Housekeeping Room Status Management System"
 )
 
 st.divider()
+
 
 # =========================================================
 # SIDEBAR
@@ -252,10 +560,10 @@ st.divider()
 
 with st.sidebar:
 
-    st.header("⚙️ BỘ LỌC")
+    st.header("🔎 BỘ LỌC")
 
     search_room = st.text_input(
-        "🔎 Tìm số phòng",
+        "Tìm số phòng",
         placeholder="Ví dụ: V001"
     )
 
@@ -271,135 +579,158 @@ with st.sidebar:
     ]
 
     selected_status = st.selectbox(
-        "🚪 Tình trạng phòng",
+        "Tình trạng phòng",
         status_options
     )
 
-    villa_options = [
-        "Tất cả"
-    ] + sorted(
-        rooms_df["villa_type"].dropna().unique().tolist()
-    )
+    if not rooms_df.empty:
+
+        villa_options = [
+            "Tất cả"
+        ] + sorted(
+            rooms_df["villa_type"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+    else:
+
+        villa_options = ["Tất cả"]
 
     selected_villa = st.selectbox(
-        "🏡 Loại villa",
+        "Loại villa",
         villa_options
     )
 
     st.divider()
 
-    st.info(
-        "💡 Cập nhật tình trạng phòng thường xuyên "
-        "để bộ phận Housekeeping và Front Office "
-        "nắm được tình trạng phòng mới nhất."
+    st.success(
+        "🟢 Database: Aiven MySQL"
     )
 
 
 # =========================================================
-# LỌC DỮ LIỆU
+# LỌC
 # =========================================================
 
 filtered_df = rooms_df.copy()
 
-if search_room:
-    filtered_df = filtered_df[
-        filtered_df["room_number"]
-        .str.contains(search_room, case=False, na=False)
-    ]
+if not filtered_df.empty:
 
-if selected_status != "Tất cả":
-    filtered_df = filtered_df[
-        filtered_df["status"] == selected_status
-    ]
+    if search_room:
 
-if selected_villa != "Tất cả":
-    filtered_df = filtered_df[
-        filtered_df["villa_type"] == selected_villa
-    ]
+        filtered_df = filtered_df[
+            filtered_df["room_number"]
+            .str.contains(
+                search_room,
+                case=False,
+                na=False
+            )
+        ]
+
+    if selected_status != "Tất cả":
+
+        filtered_df = filtered_df[
+            filtered_df["status"]
+            == selected_status
+        ]
+
+    if selected_villa != "Tất cả":
+
+        filtered_df = filtered_df[
+            filtered_df["villa_type"]
+            == selected_villa
+        ]
 
 
 # =========================================================
 # DASHBOARD
 # =========================================================
 
-st.markdown("## 📊 TỔNG QUAN PHÒNG")
+st.header("📊 TỔNG QUAN")
 
 total_rooms = len(rooms_df)
 
-vacant_clean = len(
-    rooms_df[rooms_df["status"] == "Vacant Clean"]
-)
+def count_status(status):
+    if rooms_df.empty:
+        return 0
 
-vacant_dirty = len(
-    rooms_df[rooms_df["status"] == "Vacant Dirty"]
-)
+    return len(
+        rooms_df[
+            rooms_df["status"] == status
+        ]
+    )
 
-occupied_clean = len(
-    rooms_df[rooms_df["status"] == "Occupied Clean"]
-)
 
-occupied_dirty = len(
-    rooms_df[rooms_df["status"] == "Occupied Dirty"]
-)
+vacant_clean = count_status("Vacant Clean")
+vacant_dirty = count_status("Vacant Dirty")
+occupied_clean = count_status("Occupied Clean")
+occupied_dirty = count_status("Occupied Dirty")
+inspected = count_status("Inspected")
+out_of_order = count_status("Out of Order")
+out_of_service = count_status("Out of Service")
 
-inspected = len(
-    rooms_df[rooms_df["status"] == "Inspected"]
-)
 
-out_of_order = len(
-    rooms_df[rooms_df["status"] == "Out of Order"]
-)
+row1 = st.columns(4)
 
-col1, col2, col3, col4 = st.columns(4)
+with row1[0]:
 
-with col1:
     st.metric(
-        "🏨 Tổng số phòng",
+        "🏨 Tổng phòng",
         total_rooms
     )
 
-with col2:
+with row1[1]:
+
     st.metric(
         "🟢 Vacant Clean",
         vacant_clean
     )
 
-with col3:
+with row1[2]:
+
     st.metric(
         "🔴 Vacant Dirty",
         vacant_dirty
     )
 
-with col4:
+with row1[3]:
+
     st.metric(
         "🔵 Occupied Clean",
         occupied_clean
     )
 
-col5, col6, col7, col8 = st.columns(4)
 
-with col5:
+row2 = st.columns(4)
+
+with row2[0]:
+
     st.metric(
         "🟠 Occupied Dirty",
         occupied_dirty
     )
 
-with col6:
+with row2[1]:
+
     st.metric(
         "✅ Inspected",
         inspected
     )
 
-with col7:
+with row2[2]:
+
     st.metric(
         "⚠️ Out of Order",
         out_of_order
     )
 
-with col8:
+with row2[3]:
+
     st.metric(
-        "📋 Đang hiển thị",
-        len(filtered_df)
+        "🚫 Out of Service",
+        out_of_service
     )
 
 
@@ -407,15 +738,15 @@ st.divider()
 
 
 # =========================================================
-# BẢNG PHÒNG
+# DANH SÁCH PHÒNG
 # =========================================================
 
-st.markdown("## 🚪 DANH SÁCH PHÒNG")
+st.header("🚪 DANH SÁCH PHÒNG")
 
 if filtered_df.empty:
 
     st.warning(
-        "Không tìm thấy phòng phù hợp với điều kiện lọc."
+        "Không có phòng phù hợp."
     )
 
 else:
@@ -456,101 +787,113 @@ else:
 
 st.divider()
 
-st.markdown("## ✏️ CẬP NHẬT TÌNH TRẠNG PHÒNG")
+st.header("✏️ CẬP NHẬT TÌNH TRẠNG PHÒNG")
 
-room_list = rooms_df["room_number"].tolist()
+if rooms_df.empty:
 
-col1, col2 = st.columns(2)
+    st.warning(
+        "Chưa có dữ liệu phòng."
+    )
 
-with col1:
+else:
+
+    room_list = rooms_df[
+        "room_number"
+    ].tolist()
 
     selected_room = st.selectbox(
-        "Chọn phòng cần cập nhật",
+        "Chọn phòng",
         room_list
     )
 
     current_room = rooms_df[
-        rooms_df["room_number"] == selected_room
+        rooms_df["room_number"]
+        == selected_room
     ].iloc[0]
 
-    st.write(
-        f"**Loại villa:** {current_room['villa_type']}"
-    )
+    col1, col2 = st.columns(2)
 
-    st.write(
-        f"**Tình trạng hiện tại:** "
-        f"`{current_room['status']}`"
-    )
+    with col1:
 
+        st.info(
+            f"""
+**Phòng:** {selected_room}
 
-with col2:
+**Loại villa:** {current_room["villa_type"]}
 
-    status_update = st.selectbox(
-        "Tình trạng mới",
-        [
-            "Vacant Clean",
-            "Vacant Dirty",
-            "Occupied Clean",
-            "Occupied Dirty",
-            "Inspected",
-            "Out of Order",
-            "Out of Service"
-        ]
-    )
-
-    guest_name = st.text_input(
-        "Tên khách",
-        value=str(current_room["guest_name"] or "")
-    )
-
-    updated_by = st.text_input(
-        "Người cập nhật",
-        placeholder="Ví dụ: HK Staff"
-    )
-
-note = st.text_area(
-    "📝 Ghi chú Housekeeping",
-    placeholder=(
-        "Ví dụ: Đã vệ sinh phòng, bổ sung amenities, "
-        "kiểm tra minibar..."
-    )
-)
-
-if st.button(
-    "💾 CẬP NHẬT PHÒNG",
-    type="primary",
-    use_container_width=True
-):
-
-    if not updated_by.strip():
-        st.error(
-            "Vui lòng nhập tên người cập nhật."
+**Tình trạng hiện tại:** {current_room["status"]}
+"""
         )
 
-    else:
-
-        success = update_room(
-            selected_room,
-            status_update,
-            guest_name,
-            note,
-            updated_by
-        )
-
-        if success:
-
-            st.success(
-                f"Đã cập nhật phòng {selected_room} "
-                f"→ {status_update}"
+        guest_name = st.text_input(
+            "Tên khách",
+            value=str(
+                current_room["guest_name"]
+                or ""
             )
+        )
 
-            st.rerun()
+    with col2:
+
+        status_update = st.selectbox(
+            "Tình trạng mới",
+
+            [
+                "Vacant Clean",
+                "Vacant Dirty",
+                "Occupied Clean",
+                "Occupied Dirty",
+                "Inspected",
+                "Out of Order",
+                "Out of Service"
+            ]
+        )
+
+        updated_by = st.text_input(
+            "Người cập nhật",
+            placeholder="Ví dụ: My - HK"
+        )
+
+    note = st.text_area(
+        "📝 Ghi chú Housekeeping",
+
+        placeholder=(
+            "Ví dụ: Đã vệ sinh toilet, "
+            "bổ sung amenities, "
+            "thay khăn, kiểm tra minibar..."
+        )
+    )
+
+    if st.button(
+        "💾 LƯU CẬP NHẬT",
+        type="primary",
+        use_container_width=True
+    ):
+
+        if not updated_by.strip():
+
+            st.error(
+                "⚠️ Vui lòng nhập người cập nhật."
+            )
 
         else:
 
-            st.error(
-                "Không thể cập nhật phòng."
+            success = update_room(
+                selected_room,
+                status_update,
+                guest_name,
+                note,
+                updated_by
             )
+
+            if success:
+
+                st.success(
+                    f"✅ Đã cập nhật {selected_room} → "
+                    f"{status_update}"
+                )
+
+                st.rerun()
 
 
 # =========================================================
@@ -559,7 +902,7 @@ if st.button(
 
 st.divider()
 
-st.markdown("## 🕒 LỊCH SỬ CẬP NHẬT")
+st.header("🕒 LỊCH SỬ CẬP NHẬT")
 
 history_df = get_history()
 
@@ -571,7 +914,9 @@ if history_df.empty:
 
 else:
 
-    history_df.columns = [
+    history_display = history_df.copy()
+
+    history_display.columns = [
         "Phòng",
         "Trạng thái cũ",
         "Trạng thái mới",
@@ -581,7 +926,7 @@ else:
     ]
 
     st.dataframe(
-        history_df,
+        history_display,
         use_container_width=True,
         hide_index=True,
         height=400
@@ -589,27 +934,29 @@ else:
 
 
 # =========================================================
-# THỐNG KÊ THEO TRẠNG THÁI
+# THỐNG KÊ
 # =========================================================
 
 st.divider()
 
-st.markdown("## 📈 THỐNG KÊ TÌNH TRẠNG PHÒNG")
+st.header("📈 THỐNG KÊ TÌNH TRẠNG")
 
-status_count = (
-    rooms_df["status"]
-    .value_counts()
-    .reset_index()
-)
+if not rooms_df.empty:
 
-status_count.columns = [
-    "Tình trạng",
-    "Số phòng"
-]
+    chart_data = (
+        rooms_df["status"]
+        .value_counts()
+        .rename_axis("Tình trạng")
+        .reset_index(
+            name="Số phòng"
+        )
+    )
 
-st.bar_chart(
-    status_count.set_index("Tình trạng")
-)
+    st.bar_chart(
+        chart_data.set_index(
+            "Tình trạng"
+        )
+    )
 
 
 # =========================================================
@@ -620,10 +967,9 @@ st.divider()
 
 st.caption(
     "🏨 Melia Vinpearl Phú Quốc | "
-    "Housekeeping Room Status Management System"
+    "Housekeeping Management System"
 )
 
 st.caption(
-    f"⏱️ Thời gian hệ thống: "
-    f"{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+    "☁️ Database: Aiven MySQL"
 )
